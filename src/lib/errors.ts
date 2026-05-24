@@ -71,22 +71,25 @@ export function formatHevyApiError(error: HevyApiError): McpToolResponse {
 			parts.push("**Details:**");
 			parts.push(error.data);
 		} else if (typeof error.data === "object") {
-			// Try to extract useful information from the error data
 			const errorData = error.data;
+			let knownFieldFound = false;
 
 			if (errorData.error) {
+				knownFieldFound = true;
 				parts.push("");
 				parts.push("**Details:**");
-				parts.push(errorData.error);
+				parts.push(String(errorData.error));
 			}
 
-			if (errorData.message) {
+			if (errorData.message && errorData.message !== errorData.error) {
+				knownFieldFound = true;
 				parts.push("");
 				parts.push("**Details:**");
-				parts.push(errorData.message);
+				parts.push(String(errorData.message));
 			}
 
 			if (errorData.errors && Array.isArray(errorData.errors)) {
+				knownFieldFound = true;
 				parts.push("");
 				parts.push("**Validation Errors:**");
 				for (const err of errorData.errors) {
@@ -96,6 +99,12 @@ export function formatHevyApiError(error: HevyApiError): McpToolResponse {
 						parts.push(`  - ${err.field}: ${err.message}`);
 					}
 				}
+			}
+
+			if (!knownFieldFound) {
+				parts.push("");
+				parts.push("**Raw API Response:**");
+				parts.push(JSON.stringify(errorData, null, 2));
 			}
 		}
 	}

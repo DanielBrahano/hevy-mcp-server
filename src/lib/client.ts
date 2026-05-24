@@ -130,6 +130,13 @@ export class HevyClient {
     return this.request<T>(path, { method: 'PUT', body, queryParams });
   }
 
+  /**
+   * Helper method for DELETE requests
+   */
+  private async delete<T>(path: string): Promise<T> {
+    return this.request<T>(path, { method: 'DELETE' });
+  }
+
   // ============================================
   // WORKOUTS
   // ============================================
@@ -262,6 +269,20 @@ export class HevyClient {
    */
   async createRoutineFolder(folder: any): Promise<any> {
     return this.post<any>('/v1/routine_folders', folder);
+  }
+
+  /**
+   * Delete a routine by ID
+   */
+  async deleteRoutine(routineId: string): Promise<any> {
+    return this.delete<any>(`/v1/routines/${routineId}`);
+  }
+
+  /**
+   * Delete a routine folder by ID
+   */
+  async deleteRoutineFolder(folderId: string): Promise<any> {
+    return this.delete<any>(`/v1/routine_folders/${folderId}`);
   }
 
   /**

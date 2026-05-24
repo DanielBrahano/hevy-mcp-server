@@ -1,7 +1,7 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { HevyClient } from "./lib/client.js";
+import { HevyClient, HevyApiError } from "./lib/client.js";
 import {
 	CreateWorkoutSchema,
 	UpdateWorkoutSchema,
@@ -160,7 +160,9 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 					// Validate workout data including dates, exercises, and RPE values
 					validateWorkoutData(args);
 
-					const workout = await this.client.createWorkout(transformWorkoutToAPI(args));
+					const createWorkoutRes = await this.client.createWorkout(transformWorkoutToAPI(args));
+					const rawWorkout = createWorkoutRes.workout ?? createWorkoutRes;
+					const workout = Array.isArray(rawWorkout) ? rawWorkout[0] : rawWorkout;
 
 					return {
 						content: [
@@ -197,7 +199,9 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 					// Validate workout data including dates, exercises, and RPE values
 					validateWorkoutData(workoutData);
 
-					const workout = await this.client.updateWorkout(workout_id, transformWorkoutToAPI(workoutData));
+					const updateWorkoutRes = await this.client.updateWorkout(workout_id, transformWorkoutToAPI(workoutData));
+					const rawWorkout = updateWorkoutRes.workout ?? updateWorkoutRes;
+					const workout = Array.isArray(rawWorkout) ? rawWorkout[0] : rawWorkout;
 
 					return {
 						content: [
@@ -366,7 +370,9 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 					// Validate routine data including exercises and sets
 					validateRoutineData(args);
 
-					const routine = await this.client.createRoutine(transformRoutineToAPI(args));
+					const createRoutineRes = await this.client.createRoutine(transformRoutineToAPI(args));
+					const rawRoutine = createRoutineRes.routine ?? createRoutineRes;
+					const routine = Array.isArray(rawRoutine) ? rawRoutine[0] : rawRoutine;
 
 					return {
 						content: [
@@ -403,7 +409,9 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 					// Validate routine data including exercises and sets
 					validateRoutineData(routineData);
 
-					const routine = await this.client.updateRoutine(routine_id, transformRoutineToAPI(routineData));
+					const updateRoutineRes = await this.client.updateRoutine(routine_id, transformRoutineToAPI(routineData));
+					const rawRoutine = updateRoutineRes.routine ?? updateRoutineRes;
+					const routine = Array.isArray(rawRoutine) ? rawRoutine[0] : rawRoutine;
 
 					return {
 						content: [
@@ -418,6 +426,35 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 						],
 					};
 				} catch (error) {
+					return handleError(error);
+				}
+			}
+		);
+
+		this.server.tool(
+			"delete_routine",
+			{
+				routine_id: z.string().describe("The ID of the routine to delete"),
+			},
+			async ({ routine_id }) => {
+				try {
+					await this.client.deleteRoutine(routine_id);
+
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Routine ${routine_id} deleted successfully`,
+							},
+						],
+					};
+				} catch (error) {
+					if (error instanceof HevyApiError && error.status === 404) {
+						return {
+							content: [{ type: "text", text: `❌ Routine not found: ${routine_id}` }],
+							isError: true,
+						};
+					}
 					return handleError(error);
 				}
 			}
@@ -646,7 +683,9 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 			CreateRoutineFolderSchema.shape,
 			async (args) => {
 				try {
-					const folder = await this.client.createRoutineFolder(transformRoutineFolderToAPI(args));
+					const createFolderRes = await this.client.createRoutineFolder(transformRoutineFolderToAPI(args));
+					const rawFolder = createFolderRes.routine_folder ?? createFolderRes;
+					const folder = Array.isArray(rawFolder) ? rawFolder[0] : rawFolder;
 
 					return {
 						content: [
@@ -661,6 +700,35 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 						],
 					};
 				} catch (error) {
+					return handleError(error);
+				}
+			}
+		);
+
+		this.server.tool(
+			"delete_routine_folder",
+			{
+				folder_id: z.string().describe("The ID of the routine folder to delete. Routines inside are NOT deleted — they move to the default folder."),
+			},
+			async ({ folder_id }) => {
+				try {
+					await this.client.deleteRoutineFolder(folder_id);
+
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Folder ${folder_id} deleted successfully`,
+							},
+						],
+					};
+				} catch (error) {
+					if (error instanceof HevyApiError && error.status === 404) {
+						return {
+							content: [{ type: "text", text: `❌ Folder not found: ${folder_id}` }],
+							isError: true,
+						};
+					}
 					return handleError(error);
 				}
 			}

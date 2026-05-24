@@ -1,5 +1,9 @@
 .DS_Store
 
+# Local wrangler config (contains personal KV namespace IDs)
+# Copy wrangler.example.jsonc to wrangler.jsonc and fill in your own values
+wrangler.jsonc
+
 # Logs
 
 logs

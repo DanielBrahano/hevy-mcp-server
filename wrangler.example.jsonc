@@ -1,0 +1,72 @@
+/**
+ * For more details on how to configure Wrangler, refer to:
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ *
+ * SETUP: Copy this file to wrangler.jsonc and fill in your own values.
+ * Run: wrangler kv namespace create OAUTH_KV
+ * Then replace YOUR_KV_NAMESPACE_ID below with the ID it gives you.
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "hevy-mcp-server",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-03-10",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"migrations": [
+		{
+			"new_sqlite_classes": [
+				"MyMCP"
+			],
+			"tag": "v1"
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"class_name": "MyMCP",
+				"name": "MCP_OBJECT"
+			}
+		]
+	},
+	"observability": {
+		"enabled": true
+	},
+	/**
+	 * KV Namespaces - Production
+	 * Stores encrypted user API keys for multi-user OAuth support
+	 * Create with: wrangler kv namespace create OAUTH_KV
+	 */
+	"kv_namespaces": [
+		{
+			"binding": "OAUTH_KV",
+			"id": "YOUR_KV_NAMESPACE_ID"
+		}
+	],
+	"workers_dev": true,
+	/**
+	 * Development Environment
+	 * Overrides for local development to avoid Host header rewriting
+	 */
+	"env": {
+		"dev": {
+			"name": "hevy-mcp-server-dev",
+			"durable_objects": {
+				"bindings": [
+					{
+						"class_name": "MyMCP",
+						"name": "MCP_OBJECT"
+					}
+				]
+			},
+			"kv_namespaces": [
+				{
+					"binding": "OAUTH_KV",
+					"id": "YOUR_KV_NAMESPACE_ID"
+				}
+			]
+			// No routes for dev - prevents Host header issues in local development
+		}
+	}
+}

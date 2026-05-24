@@ -185,7 +185,7 @@ export type RoutineExercise = z.infer<typeof RoutineExerciseSchema>;
  */
 export const CreateRoutineSchema = z.object({
 	title: z.string().describe("Title of the routine"),
-	folder_id: z.number().optional().nullable().describe("Folder ID (null for default 'My Routines' folder)"),
+	folder_id: z.number().nullable().default(null).describe("Folder ID (null for default 'My Routines' folder)"),
 	notes: z.string().optional().describe("Notes for the routine"),
 	exercises: z.array(RoutineExerciseSchema).describe("Exercises in the routine"),
 });
@@ -425,7 +425,7 @@ export function transformWorkoutToAPI(workout: CreateWorkout) {
 			is_private: workout.is_private,
 			exercises: workout.exercises.map((ex) => removeUndefined({
 				exercise_template_id: ex.exercise_template_id,
-				superset_id: cleanValue(ex.superset_id),
+				superset_id: ex.superset_id,
 				notes: cleanValue(ex.notes),
 				sets: ex.sets.map((set) => removeUndefined({
 					type: set.type,
@@ -475,7 +475,7 @@ export function transformRoutineToAPI(routine: CreateRoutine | UpdateRoutine) {
 		notes: cleanValue(routine.notes),
 		exercises: routine.exercises.map((ex) => removeUndefined({
 			exercise_template_id: ex.exercise_template_id,
-			superset_id: cleanValue(ex.superset_id),
+			superset_id: ex.superset_id,
 			rest_seconds: cleanValue(ex.rest_seconds),
 			notes: cleanValue(ex.notes),
 			sets: ex.sets.map((set) => removeUndefined({
@@ -498,7 +498,7 @@ export function transformRoutineToAPI(routine: CreateRoutine | UpdateRoutine) {
 		return {
 			routine: removeUndefined({
 				...baseRoutine,
-				folder_id: cleanValue(routine.folder_id),
+				folder_id: routine.folder_id,
 			}),
 		};
 	}
