@@ -451,7 +451,7 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 				} catch (error) {
 					if (error instanceof HevyApiError && error.status === 404) {
 						return {
-							content: [{ type: "text", text: `❌ Routine not found: ${routine_id}` }],
+							content: [{ type: "text", text: `❌ The Hevy public API does not support deleting routines.\n\nThis endpoint is not exposed in the Hevy API — routines can only be deleted inside the Hevy app itself.` }],
 							isError: true,
 						};
 					}
@@ -725,7 +725,7 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 				} catch (error) {
 					if (error instanceof HevyApiError && error.status === 404) {
 						return {
-							content: [{ type: "text", text: `❌ Folder not found: ${folder_id}` }],
+							content: [{ type: "text", text: `❌ The Hevy public API does not support deleting routine folders.\n\nThis endpoint is not exposed in the Hevy API — folders can only be deleted inside the Hevy app itself.` }],
 							isError: true,
 						};
 					}

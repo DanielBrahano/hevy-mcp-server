@@ -81,6 +81,11 @@ export class HevyClient {
       body: body ? JSON.stringify(body) : undefined,
     });
 
+    // 204 No Content — no body to parse, treat as success
+    if (response.status === 204) {
+      return undefined as unknown as T;
+    }
+
     // Parse the response
     const data = response.headers.get('Content-Type')?.includes('application/json')
       ? await response.json()
