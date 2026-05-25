@@ -296,4 +296,22 @@ export class HevyClient {
   async createExerciseTemplate(exercise: any): Promise<any> {
     return this.post<any>('/v1/exercise_templates', exercise);
   }
+
+  // ============================================
+  // BODY MEASUREMENTS
+  // ============================================
+
+  /**
+   * Get body measurements (bodyweight, body fat %)
+   */
+  async getBodyMeasurements(options?: { page?: number; pageSize?: number }): Promise<any> {
+    return this.get<any>('/v1/body_measurements', options as Record<string, string | number | boolean | undefined>);
+  }
+
+  /**
+   * Create a body measurement entry
+   */
+  async createBodyMeasurement(data: { date: string; weight_kg: number; body_fat_percentage?: number | null }): Promise<any> {
+    return this.post<any>('/v1/body_measurements', data);
+  }
 }

@@ -245,22 +245,19 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 		this.server.tool(
 			"get_workout_events",
 			{
+				since: z.string().describe("Get events since this date (ISO 8601 format, e.g., 2024-01-01T00:00:00Z). Required — use a past date to get all recent changes."),
 				page: z.number().optional().describe("Page number (Must be 1 or greater)").default(1),
-				page_size: z.number().optional().describe("Number of items per page (Max 10)").default(5),
-				since: z.string().optional().describe("Get events since this date (ISO 8601 format, e.g., 2024-01-01T00:00:00Z)"),
+				page_size: z.number().optional().describe("Number of items per page (Max 10)").default(10),
 			},
 			async (args) => {
 				try {
 					// Validate pagination parameters
 					validatePagination(args.page, args.page_size, PAGINATION_LIMITS.WORKOUT_EVENTS);
 
-					// Validate date format if provided
-					if (args.since) {
-						validateISO8601Date(args.since, "since");
-					}
+					// Validate since date format
+					validateISO8601Date(args.since, "since");
 
-					const params: any = { page: args.page, pageSize: args.page_size };
-					if (args.since) params.since = args.since;
+					const params: any = { page: args.page, pageSize: args.page_size, since: args.since };
 
 					const events = await this.client.getWorkoutEvents(params);
 
@@ -729,6 +726,92 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 							isError: true,
 						};
 					}
+					return handleError(error);
+				}
+			}
+		);
+
+		// ============================================
+		// BODY MEASUREMENTS
+		// ============================================
+
+		this.server.tool(
+			"get_body_measurements",
+			{
+				page: z.number().optional().describe("Page number (Must be 1 or greater)").default(1),
+				page_size: z.number().optional().describe("Number of items per page (Max 10)").default(10),
+			},
+			async ({ page, page_size }) => {
+				try {
+					validatePagination(page, page_size, PAGINATION_LIMITS.BODY_MEASUREMENTS);
+
+					const result = await this.client.getBodyMeasurements({ page, pageSize: page_size });
+
+					const measurements = result.body_measurements ?? result;
+					const list = Array.isArray(measurements)
+						? measurements.map((m: any, i: number) =>
+							`${i + 1}. ${m.date}: ${m.weight_kg}kg${m.body_fat_percentage != null ? `, ${m.body_fat_percentage}% body fat` : ``}`)
+						.join('\n')
+						: 'No measurements found';
+
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Retrieved body measurements (page ${result.page ?? 1} of ${result.page_count ?? 1})`,
+							},
+							{
+								type: "text",
+								text: list,
+							},
+							{
+								type: "text",
+								text: `\n\nFull data:\n${JSON.stringify(result, null, 2)}`,
+							},
+						],
+					};
+				} catch (error) {
+					return handleError(error);
+				}
+			}
+		);
+
+		this.server.tool(
+			"create_body_measurement",
+			{
+				date: z.string().describe("Date of the measurement (ISO 8601 format, e.g., 2026-05-25 or 2026-05-25T00:00:00Z)"),
+				weight_kg: z.number().describe("Body weight in kilograms"),
+				body_fat_percentage: z.number().optional().nullable().describe("Body fat percentage (optional)"),
+			},
+			async (args) => {
+				try {
+					validateISO8601Date(args.date, "date");
+
+					const createRes = await this.client.createBodyMeasurement({
+						date: args.date,
+						weight_kg: args.weight_kg,
+						...(args.body_fat_percentage != null ? { body_fat_percentage: args.body_fat_percentage } : {}),
+					});
+					const raw = createRes?.body_measurement ?? createRes;
+					const measurement = Array.isArray(raw) ? raw[0] : raw;
+
+					return {
+						content: [
+							{
+								type: "text",
+								text: `✓ Successfully logged body measurement`,
+							},
+							{
+								type: "text",
+								text: `Date: ${measurement.date ?? args.date}\nWeight: ${measurement.weight_kg ?? args.weight_kg}kg${measurement.body_fat_percentage != null ? `\nBody Fat: ${measurement.body_fat_percentage}%` : ``}`,
+							},
+							{
+								type: "text",
+								text: `\n\nFull response:\n${JSON.stringify(createRes, null, 2)}`,
+							},
+						],
+					};
+				} catch (error) {
 					return handleError(error);
 				}
 			}
