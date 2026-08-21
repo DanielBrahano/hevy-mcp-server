@@ -24,6 +24,7 @@ import {
 	PAGINATION_LIMITS,
 } from "./lib/transforms.js";
 import { handleError } from "./lib/errors.js";
+import { TOOL_CATALOG } from "./lib/tool-catalog.js";
 import type { Props } from "./utils.js";
 import { getUserApiKey } from "./lib/key-storage.js";
 
@@ -48,8 +49,22 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 	private client!: HevyClient;
 
-	async init() {
-		// Check if user is authenticated
+	/**
+	 * Resolve the Hevy API client, authenticating on first use.
+	 *
+	 * Deliberately NOT called from init(). Tool registration has to be
+	 * unconditional: when the auth check and the KV read ran first and threw,
+	 * the MCP server came up with an EMPTY tool list, so every call failed as
+	 * "tool not found" rather than reporting an auth problem — and one transient
+	 * KV miss on a cold Durable Object poisoned the entire session until it was
+	 * evicted. Resolving lazily means an auth failure surfaces as an ordinary
+	 * MCP tool error and the next call gets a fresh attempt.
+	 */
+	private async ensureClient(): Promise<HevyClient> {
+		if (this.client) {
+			return this.client;
+		}
+
 		if (!this.props || !this.props.login) {
 			const setupHint = this.props?.baseUrl
 				? ` Visit ${this.props.baseUrl}/setup to get started.`
@@ -77,10 +92,14 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 			);
 		}
 
-		// Initialize Hevy API client with user-specific API key
-		this.client = new HevyClient({
-			apiKey: hevyApiKey,
-		});
+		this.client = new HevyClient({ apiKey: hevyApiKey });
+		return this.client;
+	}
+
+	async init() {
+		// Everything below is unconditional and synchronous — no awaits, no
+		// throws, no branching. A cold start can therefore never bring the
+		// server up with a partial or empty tool manifest.
 
 		// ============================================
 		// WORKOUTS
@@ -88,16 +107,19 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"get_workouts",
+			TOOL_CATALOG.get_workouts,
 			{
-				page: z.number().optional().describe("Page number (Must be 1 or greater)").default(1),
-				page_size: z.number().optional().describe("Number of items per page (Max 10)").default(10),
+				page: z.number().optional().default(1).describe("Page number (Must be 1 or greater)"),
+				page_size: z.number().optional().default(10).describe("Number of items per page (Max 10)"),
 			},
 			async ({ page, page_size }) => {
 				try {
+					const client = await this.ensureClient();
+
 					// Validate pagination parameters
 					validatePagination(page, page_size, PAGINATION_LIMITS.WORKOUTS);
 
-					const workouts = await this.client.getWorkouts({ page, pageSize: page_size });
+					const workouts = await client.getWorkouts({ page, pageSize: page_size });
 
 					const workoutDetails = workouts.workouts?.map((workout: any, index: number) => {
 						return `Workout ${index + 1}: ${workout.title || 'Untitled'}\n  ID: ${workout.id}\n  Date: ${workout.start_time}`;
@@ -127,12 +149,15 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"get_workout",
+			TOOL_CATALOG.get_workout,
 			{
 				workout_id: z.string().describe("The ID of the workout to retrieve"),
 			},
 			async ({ workout_id }) => {
 				try {
-					const workout = await this.client.getWorkout(workout_id);
+					const client = await this.ensureClient();
+
+					const workout = await client.getWorkout(workout_id);
 
 					return {
 						content: [
@@ -154,13 +179,16 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"create_workout",
+			TOOL_CATALOG.create_workout,
 			CreateWorkoutSchema.shape,
 			async (args) => {
 				try {
+					const client = await this.ensureClient();
+
 					// Validate workout data including dates, exercises, and RPE values
 					validateWorkoutData(args);
 
-					const createWorkoutRes = await this.client.createWorkout(transformWorkoutToAPI(args));
+					const createWorkoutRes = await client.createWorkout(transformWorkoutToAPI(args));
 					const rawWorkout = createWorkoutRes.workout ?? createWorkoutRes;
 					const workout = Array.isArray(rawWorkout) ? rawWorkout[0] : rawWorkout;
 
@@ -188,18 +216,21 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"update_workout",
+			TOOL_CATALOG.update_workout,
 			{
 				workout_id: z.string().describe("The ID of the workout to update"),
 				...UpdateWorkoutSchema.shape,
 			},
 			async (args) => {
 				try {
+					const client = await this.ensureClient();
+
 					const { workout_id, ...workoutData } = args;
 
 					// Validate workout data including dates, exercises, and RPE values
 					validateWorkoutData(workoutData);
 
-					const updateWorkoutRes = await this.client.updateWorkout(workout_id, transformWorkoutToAPI(workoutData));
+					const updateWorkoutRes = await client.updateWorkout(workout_id, transformWorkoutToAPI(workoutData));
 					const rawWorkout = updateWorkoutRes.workout ?? updateWorkoutRes;
 					const workout = Array.isArray(rawWorkout) ? rawWorkout[0] : rawWorkout;
 
@@ -223,10 +254,13 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"get_workouts_count",
+			TOOL_CATALOG.get_workouts_count,
 			{},
 			async () => {
 				try {
-					const result = await this.client.getWorkoutsCount();
+					const client = await this.ensureClient();
+
+					const result = await client.getWorkoutsCount();
 
 					return {
 						content: [
@@ -244,13 +278,16 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"get_workout_events",
+			TOOL_CATALOG.get_workout_events,
 			{
 				since: z.string().describe("Get events since this date (ISO 8601 format, e.g., 2024-01-01T00:00:00Z). Required — use a past date to get all recent changes."),
-				page: z.number().optional().describe("Page number (Must be 1 or greater)").default(1),
-				page_size: z.number().optional().describe("Number of items per page (Max 10)").default(10),
+				page: z.number().optional().default(1).describe("Page number (Must be 1 or greater)"),
+				page_size: z.number().optional().default(10).describe("Number of items per page (Max 10)"),
 			},
 			async (args) => {
 				try {
+					const client = await this.ensureClient();
+
 					// Validate pagination parameters
 					validatePagination(args.page, args.page_size, PAGINATION_LIMITS.WORKOUT_EVENTS);
 
@@ -259,7 +296,7 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 					const params: any = { page: args.page, pageSize: args.page_size, since: args.since };
 
-					const events = await this.client.getWorkoutEvents(params);
+					const events = await client.getWorkoutEvents(params);
 
 					const eventDetails = events.events?.map((event: any, index: number) => {
 						if (event.type === 'deleted') {
@@ -293,16 +330,19 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"get_routines",
+			TOOL_CATALOG.get_routines,
 			{
-				page: z.number().optional().describe("Page number (Must be 1 or greater)").default(1),
-				page_size: z.number().optional().describe("Number of items per page (Max 10)").default(5),
+				page: z.number().optional().default(1).describe("Page number (Must be 1 or greater)"),
+				page_size: z.number().optional().default(5).describe("Number of items per page (Max 10)"),
 			},
 			async ({ page, page_size }) => {
 				try {
+					const client = await this.ensureClient();
+
 					// Validate pagination parameters
 					validatePagination(page, page_size, PAGINATION_LIMITS.ROUTINES);
 
-					const routines = await this.client.getRoutines({ page, pageSize: page_size });
+					const routines = await client.getRoutines({ page, pageSize: page_size });
 
 					const routineDetails = routines.routines?.map((routine: any, index: number) => {
 						const exerciseCount = routine.exercises?.length || 0;
@@ -333,12 +373,15 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"get_routine",
+			TOOL_CATALOG.get_routine,
 			{
 				routine_id: z.string().describe("The ID of the routine to retrieve"),
 			},
 			async ({ routine_id }) => {
 				try {
-					const result = await this.client.getRoutine(routine_id);
+					const client = await this.ensureClient();
+
+					const result = await client.getRoutine(routine_id);
 					const routine = result.routine;
 
 					return {
@@ -361,13 +404,16 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"create_routine",
+			TOOL_CATALOG.create_routine,
 			CreateRoutineSchema.shape,
 			async (args) => {
 				try {
+					const client = await this.ensureClient();
+
 					// Validate routine data including exercises and sets
 					validateRoutineData(args);
 
-					const createRoutineRes = await this.client.createRoutine(transformRoutineToAPI(args));
+					const createRoutineRes = await client.createRoutine(transformRoutineToAPI(args));
 					const rawRoutine = createRoutineRes.routine ?? createRoutineRes;
 					const routine = Array.isArray(rawRoutine) ? rawRoutine[0] : rawRoutine;
 
@@ -395,18 +441,21 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"update_routine",
+			TOOL_CATALOG.update_routine,
 			{
 				routine_id: z.string().describe("The ID of the routine to update"),
 				...UpdateRoutineSchema.shape,
 			},
 			async (args) => {
 				try {
+					const client = await this.ensureClient();
+
 					const { routine_id, ...routineData } = args;
 
 					// Validate routine data including exercises and sets
 					validateRoutineData(routineData);
 
-					const updateRoutineRes = await this.client.updateRoutine(routine_id, transformRoutineToAPI(routineData));
+					const updateRoutineRes = await client.updateRoutine(routine_id, transformRoutineToAPI(routineData));
 					const rawRoutine = updateRoutineRes.routine ?? updateRoutineRes;
 					const routine = Array.isArray(rawRoutine) ? rawRoutine[0] : rawRoutine;
 
@@ -430,12 +479,15 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"delete_routine",
+			TOOL_CATALOG.delete_routine,
 			{
 				routine_id: z.string().describe("The ID of the routine to delete"),
 			},
 			async ({ routine_id }) => {
 				try {
-					await this.client.deleteRoutine(routine_id);
+					const client = await this.ensureClient();
+
+					await client.deleteRoutine(routine_id);
 
 					return {
 						content: [
@@ -463,16 +515,19 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"get_exercise_templates",
+			TOOL_CATALOG.get_exercise_templates,
 			{
-				page: z.number().optional().describe("Page number (Must be 1 or greater)").default(1),
-				page_size: z.number().optional().describe("Number of items per page (Max 100)").default(20),
+				page: z.number().optional().default(1).describe("Page number (Must be 1 or greater)"),
+				page_size: z.number().optional().default(20).describe("Number of items per page (Max 100)"),
 			},
 			async ({ page, page_size }) => {
 				try {
+					const client = await this.ensureClient();
+
 					// Validate pagination parameters with higher limit for templates
 					validatePagination(page, page_size, PAGINATION_LIMITS.EXERCISE_TEMPLATES);
 
-					const templates = await this.client.getExerciseTemplates({ page, pageSize: page_size });
+					const templates = await client.getExerciseTemplates({ page, pageSize: page_size });
 
 					const templateDetails = templates.exercise_templates?.map((template: any, index: number) => {
 						return `${index + 1}. ${template.title} (${template.type})\n   ID: ${template.id}\n   Primary: ${template.primary_muscle_group}\n   Custom: ${template.is_custom ? 'Yes' : 'No'}`;
@@ -498,12 +553,15 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"get_exercise_template",
+			TOOL_CATALOG.get_exercise_template,
 			{
 				exercise_template_id: z.string().describe("The ID of the exercise template"),
 			},
 			async ({ exercise_template_id }) => {
 				try {
-					const template = await this.client.getExerciseTemplate(exercise_template_id);
+					const client = await this.ensureClient();
+
+					const template = await client.getExerciseTemplate(exercise_template_id);
 
 					return {
 						content: [
@@ -525,13 +583,16 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"create_exercise_template",
+			TOOL_CATALOG.create_exercise_template,
 			CreateExerciseTemplateSchema.shape,
 			async (args) => {
 				try {
+					const client = await this.ensureClient();
+
 					// Validate exercise template data
 					validateExerciseTemplate(args);
 
-					const result = await this.client.createExerciseTemplate(transformExerciseTemplateToAPI(args));
+					const result = await client.createExerciseTemplate(transformExerciseTemplateToAPI(args));
 
 					return {
 						content: [
@@ -553,6 +614,7 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"get_exercise_history",
+			TOOL_CATALOG.get_exercise_history,
 			{
 				exercise_template_id: z.string().describe("The ID of the exercise template"),
 				start_date: z.string().optional().describe("Optional start date (ISO 8601 format, e.g., 2024-01-01T00:00:00Z)"),
@@ -560,6 +622,8 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 			},
 			async (args) => {
 				try {
+					const client = await this.ensureClient();
+
 					// Validate date formats if provided
 					if (args.start_date) {
 						validateISO8601Date(args.start_date, "start_date");
@@ -581,7 +645,7 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 					if (args.start_date) params.start_date = args.start_date;
 					if (args.end_date) params.end_date = args.end_date;
 
-					const history = await this.client.getExerciseHistory(args.exercise_template_id, params);
+					const history = await client.getExerciseHistory(args.exercise_template_id, params);
 
 					const historyDetails = history.exercise_history?.map((entry: any, index: number) => {
 						return `${index + 1}. ${entry.workout_title} (${entry.workout_start_time})\n   Weight: ${entry.weight_kg}kg, Reps: ${entry.reps}, RPE: ${entry.rpe || 'N/A'}\n   Set Type: ${entry.set_type}`;
@@ -615,16 +679,19 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"get_routine_folders",
+			TOOL_CATALOG.get_routine_folders,
 			{
-				page: z.number().optional().describe("Page number (Must be 1 or greater)").default(1),
-				page_size: z.number().optional().describe("Number of items per page (Max 10)").default(10),
+				page: z.number().optional().default(1).describe("Page number (Must be 1 or greater)"),
+				page_size: z.number().optional().default(10).describe("Number of items per page (Max 10)"),
 			},
 			async ({ page, page_size }) => {
 				try {
+					const client = await this.ensureClient();
+
 					// Validate pagination parameters
 					validatePagination(page, page_size, PAGINATION_LIMITS.ROUTINE_FOLDERS);
 
-					const folders = await this.client.getRoutineFolders({ page, pageSize: page_size });
+					const folders = await client.getRoutineFolders({ page, pageSize: page_size });
 
 					const folderDetails = folders.routine_folders?.map((folder: any, index: number) => {
 						return `${index + 1}. ${folder.title}\n   ID: ${folder.id}\n   Index: ${folder.index}`;
@@ -650,12 +717,15 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"get_routine_folder",
+			TOOL_CATALOG.get_routine_folder,
 			{
 				folder_id: z.string().describe("The ID of the routine folder"),
 			},
 			async ({ folder_id }) => {
 				try {
-					const folder = await this.client.getRoutineFolder(folder_id);
+					const client = await this.ensureClient();
+
+					const folder = await client.getRoutineFolder(folder_id);
 
 					return {
 						content: [
@@ -677,10 +747,13 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"create_routine_folder",
+			TOOL_CATALOG.create_routine_folder,
 			CreateRoutineFolderSchema.shape,
 			async (args) => {
 				try {
-					const createFolderRes = await this.client.createRoutineFolder(transformRoutineFolderToAPI(args));
+					const client = await this.ensureClient();
+
+					const createFolderRes = await client.createRoutineFolder(transformRoutineFolderToAPI(args));
 					const rawFolder = createFolderRes.routine_folder ?? createFolderRes;
 					const folder = Array.isArray(rawFolder) ? rawFolder[0] : rawFolder;
 
@@ -704,12 +777,15 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"delete_routine_folder",
+			TOOL_CATALOG.delete_routine_folder,
 			{
 				folder_id: z.string().describe("The ID of the routine folder to delete. Routines inside are NOT deleted — they move to the default folder."),
 			},
 			async ({ folder_id }) => {
 				try {
-					await this.client.deleteRoutineFolder(folder_id);
+					const client = await this.ensureClient();
+
+					await client.deleteRoutineFolder(folder_id);
 
 					return {
 						content: [
@@ -737,15 +813,18 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"get_body_measurements",
+			TOOL_CATALOG.get_body_measurements,
 			{
-				page: z.number().optional().describe("Page number (Must be 1 or greater)").default(1),
-				page_size: z.number().optional().describe("Number of items per page (Max 10)").default(10),
+				page: z.number().optional().default(1).describe("Page number (Must be 1 or greater)"),
+				page_size: z.number().optional().default(10).describe("Number of items per page (Max 10)"),
 			},
 			async ({ page, page_size }) => {
 				try {
+					const client = await this.ensureClient();
+
 					validatePagination(page, page_size, PAGINATION_LIMITS.BODY_MEASUREMENTS);
 
-					const result = await this.client.getBodyMeasurements({ page, pageSize: page_size });
+					const result = await client.getBodyMeasurements({ page, pageSize: page_size });
 
 					const measurements = result.body_measurements ?? result;
 					const list = Array.isArray(measurements)
@@ -778,6 +857,7 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 
 		this.server.tool(
 			"create_body_measurement",
+			TOOL_CATALOG.create_body_measurement,
 			{
 				date: z.string().describe("Date of the measurement (ISO 8601 format, e.g., 2026-05-25 or 2026-05-25T00:00:00Z)"),
 				weight_kg: z.number().describe("Body weight in kilograms"),
@@ -785,9 +865,11 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 			},
 			async (args) => {
 				try {
+					const client = await this.ensureClient();
+
 					validateISO8601Date(args.date, "date");
 
-					const createRes = await this.client.createBodyMeasurement({
+					const createRes = await client.createBodyMeasurement({
 						date: args.date,
 						weight_kg: args.weight_kg,
 						...(args.body_fat_percentage != null ? { body_fat_percentage: args.body_fat_percentage } : {}),

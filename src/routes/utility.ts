@@ -1,15 +1,30 @@
 import { Hono } from "hono";
 import type { Env, Variables } from "../app.js";
+import { TOOL_CATALOG, TOOL_COUNT, TOOL_NAMES } from "../lib/tool-catalog.js";
 
 const utilityRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-// Health check endpoint
+/**
+ * Health check.
+ *
+ * Reports the tool manifest so it can be verified without going through an MCP
+ * client. The names come from the same TOOL_CATALOG that mcp-agent.ts registers
+ * from, so this cannot drift from what the Durable Object actually exposes.
+ *
+ * Pass ?verbose=1 to include each tool's description, which is the quickest way
+ * to confirm a deploy actually shipped the descriptions a client ranks on.
+ */
 utilityRoutes.get("/health", (c) => {
+	const verbose = c.req.query("verbose") === "1";
+
 	return c.json({
 		status: "healthy",
 		transport: "streamable-http",
 		version: "3.1.0",
 		oauth: "enabled",
+		tool_count: TOOL_COUNT,
+		tools: TOOL_NAMES,
+		...(verbose ? { tool_descriptions: TOOL_CATALOG } : {}),
 	});
 });
 

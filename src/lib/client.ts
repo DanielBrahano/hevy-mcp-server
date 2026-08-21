@@ -28,6 +28,54 @@ export class HevyApiError extends Error {
   }
 }
 
+/** Abort an upstream call that has not responded within this many ms. */
+const REQUEST_TIMEOUT_MS = 15_000;
+
+/** Retry attempts after the initial try, for transient failures only. */
+export const MAX_RETRIES = 3;
+
+/** Base for exponential backoff: 300ms, 600ms, 1200ms (plus jitter). */
+const BASE_BACKOFF_MS = 300;
+
+/** Never wait longer than this between attempts, whatever Retry-After says. */
+const MAX_BACKOFF_MS = 5_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Decide whether a failed response is worth retrying.
+ *
+ * 429 is always safe to retry: a rate-limited request was rejected before it
+ * was processed, so no write happened. 5xx is only safe on idempotent methods —
+ * retrying a POST that returned 500 could duplicate a workout that was in fact
+ * created, so writes fail fast and let the caller decide.
+ */
+function isRetryable(status: number, idempotent: boolean): boolean {
+  if (status === 429) return true;
+  if (!idempotent) return false;
+  return status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+/** Honour Retry-After (seconds or HTTP date) when present, else exponential backoff with jitter. */
+function retryDelayMs(response: Response | null, attempt: number): number {
+  const header = response?.headers.get('Retry-After');
+  if (header) {
+    const seconds = Number(header);
+    if (Number.isFinite(seconds)) {
+      return Math.min(seconds * 1000, MAX_BACKOFF_MS);
+    }
+    const date = Date.parse(header);
+    if (!Number.isNaN(date)) {
+      return Math.min(Math.max(date - Date.now(), 0), MAX_BACKOFF_MS);
+    }
+  }
+  const backoff = BASE_BACKOFF_MS * 2 ** attempt;
+  const jitter = Math.random() * BASE_BACKOFF_MS;
+  return Math.min(backoff + jitter, MAX_BACKOFF_MS);
+}
+
 /**
  * Client for interacting with the Hevy API
  */
@@ -44,7 +92,14 @@ export class HevyClient {
   }
 
   /**
-   * Execute a request to the Hevy API
+   * Execute a request to the Hevy API.
+   *
+   * Every call is bounded by REQUEST_TIMEOUT_MS — without it a hung upstream
+   * would hold the Worker request open until the platform killed it, which the
+   * caller sees as an unexplained dead tool rather than an error. Transient
+   * failures (429 always, 5xx and network errors on idempotent methods) are
+   * retried with exponential backoff; everything else fails fast as a
+   * HevyApiError so handleError can render it as a proper MCP error.
    */
   private async request<T>(
     path: string,
@@ -74,33 +129,65 @@ export class HevyClient {
       'Content-Type': 'application/json',
     });
 
-    // Make the request
-    const response = await fetch(url, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    // Only GET is safe to replay — see isRetryable().
+    const idempotent = method === 'GET';
+    const serializedBody = body ? JSON.stringify(body) : undefined;
 
-    // 204 No Content — no body to parse, treat as success
-    if (response.status === 204) {
-      return undefined as unknown as T;
+    for (let attempt = 0; ; attempt++) {
+      let response: Response;
+
+      try {
+        response = await fetch(url, {
+          method,
+          headers,
+          body: serializedBody,
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
+      } catch (error) {
+        // Timeout or network-level failure — no response was received, so a
+        // replay is safe for idempotent methods.
+        const timedOut = error instanceof Error && error.name === 'TimeoutError';
+
+        if (idempotent && attempt < MAX_RETRIES) {
+          await sleep(retryDelayMs(null, attempt));
+          continue;
+        }
+
+        throw new HevyApiError(
+          timedOut
+            ? `Hevy API request timed out after ${REQUEST_TIMEOUT_MS}ms`
+            : `Could not reach the Hevy API: ${error instanceof Error ? error.message : 'network error'}`,
+          504,
+          { url: path, method, attempts: attempt + 1 }
+        );
+      }
+
+      if (attempt < MAX_RETRIES && isRetryable(response.status, idempotent)) {
+        await sleep(retryDelayMs(response, attempt));
+        continue;
+      }
+
+      // 204 No Content — no body to parse, treat as success
+      if (response.status === 204) {
+        return undefined as unknown as T;
+      }
+
+      // Parse the response
+      const data = response.headers.get('Content-Type')?.includes('application/json')
+        ? await response.json()
+        : await response.text();
+
+      // Handle error responses
+      if (!response.ok) {
+        throw new HevyApiError(
+          `Hevy API request failed: ${response.status} ${response.statusText}`,
+          response.status,
+          data
+        );
+      }
+
+      return data as T;
     }
-
-    // Parse the response
-    const data = response.headers.get('Content-Type')?.includes('application/json')
-      ? await response.json()
-      : await response.text();
-
-    // Handle error responses
-    if (!response.ok) {
-      throw new HevyApiError(
-        `Hevy API request failed: ${response.status} ${response.statusText}`,
-        response.status,
-        data
-      );
-    }
-
-    return data as T;
   }
 
   /**

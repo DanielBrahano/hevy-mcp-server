@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import utilityRoutes from "../../src/routes/utility.js";
+import { TOOL_COUNT, TOOL_NAMES } from "../../src/lib/tool-catalog.js";
 
 describe("Utility Routes", () => {
 	describe("Health Check", () => {
@@ -19,7 +20,41 @@ describe("Utility Routes", () => {
 				transport: "streamable-http",
 				version: "3.1.0",
 				oauth: "enabled",
+				tool_count: TOOL_COUNT,
+				tools: TOOL_NAMES,
 			});
+		});
+
+		it("reports the real tool manifest so it can be checked without a client", async () => {
+			const request = new Request("http://localhost/health");
+			const response = await utilityRoutes.fetch(request, {} as any, {} as any);
+			const data = (await response.json()) as {
+				tool_count: number;
+				tools: string[];
+			};
+
+			expect(data.tool_count).toBe(TOOL_NAMES.length);
+			expect(data.tools).toContain("get_workout_events");
+			expect(data.tools).toContain("get_exercise_history");
+		});
+
+		it("omits descriptions unless ?verbose=1 is passed", async () => {
+			const plain = await utilityRoutes.fetch(
+				new Request("http://localhost/health"),
+				{} as any,
+				{} as any,
+			);
+			expect(await plain.json()).not.toHaveProperty("tool_descriptions");
+
+			const verbose = await utilityRoutes.fetch(
+				new Request("http://localhost/health?verbose=1"),
+				{} as any,
+				{} as any,
+			);
+			const data = (await verbose.json()) as {
+				tool_descriptions: Record<string, string>;
+			};
+			expect(Object.keys(data.tool_descriptions)).toHaveLength(TOOL_COUNT);
 		});
 
 		it("should return 200 status code", async () => {
